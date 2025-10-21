@@ -15,8 +15,10 @@ from fastapi.responses import StreamingResponse, JSONResponse
 
 # ---- Modal resources ----
 image = (
-    modal.Image.debian_slim()
-    .apt_install("ffmpeg", "curl")
+    modal.Image.from_registry(
+        "jrottenberg/ffmpeg:8.0-nvidia",  # Pre-built FFmpeg with NVENC
+        add_python="3.12"
+    )
     .pip_install("fastapi[standard]", "requests")
 )
 
@@ -31,10 +33,11 @@ app = modal.App("av1-background-converter", image=image)
 # ---- Worker: long-running job, spawned in background ----
 @app.function(
     image=image,
+    gpu="L4",
     volumes={"/vol": out_vol},
     timeout=60 * 60 * 2,  # up to 1 hour per job; adjust as needed
 )
-def transcode_worker(job_id: str, url: str, encoder: str = "libsvtav1"):
+def transcode_worker(job_id: str, url: str, encoder: str = "av1_nvenc"):
     # Update initial state
     progress_kv[job_id] = {"status": "downloading", "progress": 0, "message": "Downloading source"}
     os.makedirs(f"/vol/{job_id}", exist_ok=True)
@@ -75,34 +78,69 @@ def transcode_worker(job_id: str, url: str, encoder: str = "libsvtav1"):
         # Choose output container and path
         dst = f"/vol/{job_id}/output.mkv"
 
-        # Build FFmpeg command with progress pipe
-        # For GPU AV1 (Ada/L4): encoder="av1_nvenc"; for CPU AV1: encoder="libsvtav1"
-        v_args = []
+        # Build FFmpeg command based on encoder
         if encoder == "av1_nvenc":
-            # Reasonable defaults; tune for your quality/speed needs
-            v_args = ["-c:v", "av1_nvenc", "-cq", "28", "-preset", "p5", "-tune", "hq", "-pix_fmt", "yuv420p"]
+            # Hardware AV1 encoding - minimal options for compatibility
+            cmd = [
+                "ffmpeg",
+                "-hide_banner",
+                "-nostats",
+                "-y",
+                "-hwaccel", "cuda",
+                "-hwaccel_output_format", "cuda",
+                "-i", src,
+                "-c:v", "av1_nvenc",
+                "-preset", "p4",  # p1 (fast) to p7 (slow/best), p4 is balanced
+                "-cq", "30",  # Constant quality 0-51, lower=better (28-32 recommended)
+                "-b:v", "0",  # Use CQ mode
+                "-c:a", "aac",
+                "-b:a", "192k",
+                "-ar", "48000",
+                "-movflags", "+faststart",
+                "-progress", "pipe:1",
+                dst,
+            ]
+        elif encoder == "hevc_nvenc":
+            # Hardware HEVC encoding
+            cmd = [
+                "ffmpeg",
+                "-hide_banner",
+                "-nostats",
+                "-y",
+                "-hwaccel", "cuda",
+                "-hwaccel_output_format", "cuda",
+                "-i", src,
+                "-c:v", "hevc_nvenc",
+                "-preset", "p4",
+                "-cq", "23",
+                "-b:v", "0",
+                "-c:a", "aac",
+                "-b:a", "192k",
+                "-ar", "48000",
+                "-movflags", "+faststart",
+                "-progress", "pipe:1",
+                dst,
+            ]
         else:
-            v_args = ["-c:v", "libsvtav1", "-crf", "28", "-preset", "6", "-pix_fmt", "yuv420p10le"]
-
-        cmd = [
-            "ffmpeg",
-            "-hide_banner",
-            "-nostats",
-            "-y",
-            "-i",
-            src,
-            *v_args,
-            "-c:a",
-            "libopus",
-            "-b:a",
-            "160k",
-            "-movflags",
-            "+faststart",
-            "-progress",
-            "pipe:1",  # emit key=value progress lines to stdout
-            dst,
-        ]
-
+            # CPU software encoding (fallback)
+            cmd = [
+                "ffmpeg",
+                "-hide_banner",
+                "-nostats",
+                "-y",
+                "-i", src,
+                "-c:v", "libsvtav1",
+                "-crf", "32",
+                "-preset", "6",
+                "-svtav1-params", "fast-decode=1",
+                "-pix_fmt", "yuv420p",
+                "-c:a", "aac",
+                "-b:a", "192k",
+                "-ar", "48000",
+                "-movflags", "+faststart",
+                "-progress", "pipe:1",
+                dst,
+            ]
         progress_kv[job_id] = {"status": "encoding", "progress": 0, "message": "Encoding started"}
 
         # Run and parse progress
@@ -257,7 +295,7 @@ async def submit(payload: dict = Body(...)):
     print("Received submit request for URL:", url)
     if not url:
         raise HTTPException(status_code=400, detail="Missing 'url'")
-    encoder = payload.get("encoder", "libsvtav1")  # or "av1_nvenc" if GPU container
+    encoder = payload.get("encoder", "av1_nvenc")  # or "av1_nvenc" if GPU container
     job_id = str(uuid.uuid4())
     progress_kv[job_id] = {"status": "queued", "progress": 0, "message": "Queued"}
     transcode_worker.spawn(job_id, url, encoder)  # background job
