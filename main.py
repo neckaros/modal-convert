@@ -6,6 +6,7 @@ import time
 import asyncio
 import tempfile
 import subprocess
+import shlex
 from typing import Optional
 
 import modal
@@ -141,6 +142,10 @@ def transcode_worker(job_id: str, url: str, encoder: str = "av1_nvenc"):
                 "-progress", "pipe:1",
                 dst,
             ]
+        print("\n=== FFmpeg Command ===")
+        print(f"Command list: {cmd}")
+        print(f"\nCommand as string: {' '.join(shlex.quote(arg) for arg in cmd)}")
+        print(f"\nNumber of arguments: {len(cmd)}")
         progress_kv[job_id] = {"status": "encoding", "progress": 0, "message": "Encoding started"}
 
         # Run and parse progress
