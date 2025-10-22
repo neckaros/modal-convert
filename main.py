@@ -10,9 +10,24 @@ import shlex
 from typing import Optional
 
 import modal
+
 import requests
 from fastapi import FastAPI, Body, HTTPException
 from fastapi.responses import StreamingResponse, JSONResponse
+
+
+from enum import Enum
+from dataclasses import dataclass, field
+from typing import Optional, List
+
+from rs_common_interfaces_py import RsVideoCodec, VideoConvertJob
+
+
+
+
+
+
+
 
 # ---- Modal resources ----
 image = (
@@ -21,7 +36,7 @@ image = (
         add_python="3.12"
     )
     .dockerfile_commands("ENTRYPOINT []")
-    .pip_install("fastapi[standard]", "requests")
+    .pip_install("fastapi[standard]", "requests", "rs-common-interfaces-py==0.1.2")
 )
 
 # Durable file storage for results
@@ -39,15 +54,20 @@ app = modal.App("av1-background-converter", image=image)
     volumes={"/vol": out_vol},
     timeout=60 * 60 * 2,  # up to 1 hour per job; adjust as needed
 )
-def transcode_worker(job_id: str, url: str, vf: str = "av1", crf: int = 28):
+def transcode_worker(job_id: str, job: VideoConvertJob):
     # Update initial state
     progress_kv[job_id] = {"status": "downloading", "progress": 0, "message": "Downloading source"}
     os.makedirs(f"/vol/{job_id}", exist_ok=True)
-    print("Starting job", job_id, "with format", vf, "and CRF", crf)
+
+    if not job.request.codec:
+        job.request.codec = RsVideoCodec.AV1
+
+
+    print("Starting job", job_id, "with format", job.request.format, "with codec", job.request.codec, "and CRF", job.request.crf)
     # Download input
     with tempfile.TemporaryDirectory() as tmp:
         src = os.path.join(tmp, "input")
-        with requests.get(url, stream=True, timeout=60) as r:
+        with requests.get(job.source.url, stream=True, timeout=60) as r:
             r.raise_for_status()
             with open(src, "wb") as f:
                 for chunk in r.iter_content(1 << 20):
@@ -78,10 +98,10 @@ def transcode_worker(job_id: str, url: str, vf: str = "av1", crf: int = 28):
         duration_s = probe_duration_seconds(src)
 
         # Choose output container and path
-        dst = f"/vol/{job_id}/output.mkv"
+        dst = f"/vol/{job_id}/output{job.request.format.to_extension()}"
 
         # Build FFmpeg command based on encoder
-        if vf == "av1":
+        if job.request.codec == RsVideoCodec.AV1:
             # Hardware AV1 encoding - minimal options for compatibility
             cmd = [
                 "ffmpeg",
@@ -93,7 +113,7 @@ def transcode_worker(job_id: str, url: str, vf: str = "av1", crf: int = 28):
                 "-i", src,
                 "-c:v", "av1_nvenc",
                 "-preset", "p4",  # p1 (fast) to p7 (slow/best), p4 is balanced
-                "-cq", str(crf),  # Constant quality 0-51, lower=better (28-32 recommended)
+                "-cq", str(job.request.crf or 32),  # Constant quality 0-51, lower=better (28-32 recommended)
                 "-b:v", "0",  # Use CQ mode
                 "-c:a", "aac",
                 "-b:a", "192k",
@@ -102,7 +122,7 @@ def transcode_worker(job_id: str, url: str, vf: str = "av1", crf: int = 28):
                 "-progress", "pipe:1",
                 dst,
             ]
-        elif vf == "hevc":
+        elif job.request.codec == RsVideoCodec.H265:
             # Hardware HEVC encoding
             cmd = [
                 "ffmpeg",
@@ -114,7 +134,7 @@ def transcode_worker(job_id: str, url: str, vf: str = "av1", crf: int = 28):
                 "-i", src,
                 "-c:v", "hevc_nvenc",
                 "-preset", "p4",
-                "-cq", str(crf),
+                "-cq", str(job.request.crf or 28),
                 "-b:v", "0",
                 "-c:a", "aac",
                 "-b:a", "192k",
@@ -132,7 +152,7 @@ def transcode_worker(job_id: str, url: str, vf: str = "av1", crf: int = 28):
                 "-y",
                 "-i", src,
                 "-c:v", "libsvtav1",
-                "-crf", str(crf),
+                "-crf", str(job.request.crf or 32),
                 "-preset", "6",
                 "-svtav1-params", "fast-decode=1",
                 "-pix_fmt", "yuv420p",
@@ -296,26 +316,17 @@ def cleanup_old_files():
 api = FastAPI()
 
 @api.post("/submit")
-async def submit(payload: dict = Body(...)):
-    print("Submit payload:", payload)
-    url = payload.get("url")
-    print("Received submit request for URL:", url)
-    if not url:
+async def submit(job: VideoConvertJob):
+    print("Submit payload:", job)
+    
+    print("Received submit request for URL:", job)
+    if not job.source or not job.source.url:
         raise HTTPException(status_code=400, detail="Missing 'url'")
-    vf = payload.get("format", "av1")
-    crf_value = payload.get("crf")
-    if crf_value is not None:
-        try:
-            crf = int(crf_value)
-        except ValueError:
-            # Handle invalid (non-int) value, e.g., log error or use default
-            print(f"Invalid CRF value '{crf_value}', using default 23")
-            crf = 23
-    else:
-        crf = 23
+    print("Received submit request for URL:", job.source.url)
+  
     job_id = str(uuid.uuid4())
     progress_kv[job_id] = {"status": "queued", "progress": 0, "message": "Queued"}
-    transcode_worker.spawn(job_id, url, vf=vf, crf=crf)  # background job
+    transcode_worker.spawn(job_id, job=job)  # background job
     return {"job_id": job_id}
 
 @api.get("/status/{job_id}")

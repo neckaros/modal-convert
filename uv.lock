@@ -757,6 +757,7 @@ dependencies = [
     { name = "fastapi", extra = ["standard"] },
     { name = "modal" },
     { name = "requests" },
+    { name = "rs-common-interfaces-py" },
 ]
 
 [package.dev-dependencies]
@@ -771,6 +772,7 @@ requires-dist = [
     { name = "fastapi", extras = ["standard"], specifier = ">=0.115.0" },
     { name = "modal", specifier = ">=0.69.0" },
     { name = "requests", specifier = ">=2.32.0" },
+    { name = "rs-common-interfaces-py", specifier = ">=0.1.2" },
 ]
 
 [package.metadata.requires-dev]
@@ -1380,6 +1382,18 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/fb/a7/c25e9c6e77e1ea88ef39614e008a53de7f3eaff00d7ffb8547120de50117/rignore-0.7.1-pp311-pypy311_pp73-musllinux_1_2_armv7l.whl", hash = "sha256:54d47cf63226c12b56f0d6b3b3c50ee8e945776bf8146895dc9d6b28f31c1d70", size = 1132091, upload-time = "2025-10-15T20:58:39.337Z" },
     { url = "https://files.pythonhosted.org/packages/97/99/794a2d69535a76d029b0630c2b0444edf6b7f860e3aba5b1db98e751733c/rignore-0.7.1-pp311-pypy311_pp73-musllinux_1_2_i686.whl", hash = "sha256:e572eb7ba06d70ac295c6d2d9455491d30d1d553926b1dd3801cd2ca8f1e14de", size = 1111766, upload-time = "2025-10-15T20:58:52.398Z" },
     { url = "https://files.pythonhosted.org/packages/65/73/abf94b0697d8ca7aa953dacc2378bdaffb9f20b95316f5af07fcf9c9bb0b/rignore-0.7.1-pp311-pypy311_pp73-musllinux_1_2_x86_64.whl", hash = "sha256:dd87a68eee7aefc0d51d1a69dc8448b2ab1de8666da0bd6013e87b4a2ae71852", size = 1119460, upload-time = "2025-10-15T20:59:06.066Z" },
+]
+
+[[package]]
+name = "rs-common-interfaces-py"
+version = "0.1.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pydantic" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/80/52/c614c8b4cd68630c7b0745277484255b2832bda13a8763914e05c9e0e603/rs_common_interfaces_py-0.1.2.tar.gz", hash = "sha256:d913204a0453cd7ad39c85ccfa11e30cbfa88b31e494763ff1b68c09323b014d", size = 23121, upload-time = "2025-10-22T09:11:17.754Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fe/a6/8830afad818082e1b061504a1a0bb5dec48c1617302d96143b84a4f9a68d/rs_common_interfaces_py-0.1.2-py3-none-any.whl", hash = "sha256:8316377979a201cff12af37e474e24add7d885f1707aa47ff4f48251b8cdb37b", size = 7844, upload-time = "2025-10-22T09:11:16.515Z" },
 ]
 
 [[package]]

@@ -6,6 +6,7 @@ dependencies = [
     "modal>=0.69.0",
     "fastapi[standard]>=0.115.0",
     "requests>=2.32.0",
+    "rs-common-interfaces-py>=0.1.2",
 ]
 
 [dependency-groups]
