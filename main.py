@@ -19,6 +19,7 @@ image = (
         "jrottenberg/ffmpeg:8.0-nvidia",  # Pre-built FFmpeg with NVENC
         add_python="3.12"
     )
+    .dockerfile_commands("ENTRYPOINT []")
     .pip_install("fastapi[standard]", "requests")
 )
 
@@ -37,11 +38,11 @@ app = modal.App("av1-background-converter", image=image)
     volumes={"/vol": out_vol},
     timeout=60 * 60 * 2,  # up to 1 hour per job; adjust as needed
 )
-def transcode_worker(job_id: str, url: str, encoder: str = "av1_nvenc"):
+def transcode_worker(job_id: str, url: str, vf: str = "av1", crf: int = 28):
     # Update initial state
     progress_kv[job_id] = {"status": "downloading", "progress": 0, "message": "Downloading source"}
     os.makedirs(f"/vol/{job_id}", exist_ok=True)
-
+    print("Starting job", job_id, "with format", vf, "and CRF", crf)
     # Download input
     with tempfile.TemporaryDirectory() as tmp:
         src = os.path.join(tmp, "input")
@@ -79,7 +80,7 @@ def transcode_worker(job_id: str, url: str, encoder: str = "av1_nvenc"):
         dst = f"/vol/{job_id}/output.mkv"
 
         # Build FFmpeg command based on encoder
-        if encoder == "av1_nvenc":
+        if vf == "av1":
             # Hardware AV1 encoding - minimal options for compatibility
             cmd = [
                 "ffmpeg",
@@ -91,7 +92,7 @@ def transcode_worker(job_id: str, url: str, encoder: str = "av1_nvenc"):
                 "-i", src,
                 "-c:v", "av1_nvenc",
                 "-preset", "p4",  # p1 (fast) to p7 (slow/best), p4 is balanced
-                "-cq", "30",  # Constant quality 0-51, lower=better (28-32 recommended)
+                "-cq", str(crf),  # Constant quality 0-51, lower=better (28-32 recommended)
                 "-b:v", "0",  # Use CQ mode
                 "-c:a", "aac",
                 "-b:a", "192k",
@@ -100,7 +101,7 @@ def transcode_worker(job_id: str, url: str, encoder: str = "av1_nvenc"):
                 "-progress", "pipe:1",
                 dst,
             ]
-        elif encoder == "hevc_nvenc":
+        elif vf == "hevc":
             # Hardware HEVC encoding
             cmd = [
                 "ffmpeg",
@@ -112,7 +113,7 @@ def transcode_worker(job_id: str, url: str, encoder: str = "av1_nvenc"):
                 "-i", src,
                 "-c:v", "hevc_nvenc",
                 "-preset", "p4",
-                "-cq", "23",
+                "-cq", str(crf),
                 "-b:v", "0",
                 "-c:a", "aac",
                 "-b:a", "192k",
@@ -130,7 +131,7 @@ def transcode_worker(job_id: str, url: str, encoder: str = "av1_nvenc"):
                 "-y",
                 "-i", src,
                 "-c:v", "libsvtav1",
-                "-crf", "32",
+                "-crf", str(crf),
                 "-preset", "6",
                 "-svtav1-params", "fast-decode=1",
                 "-pix_fmt", "yuv420p",
@@ -291,18 +292,30 @@ api = FastAPI()
 
 @api.post("/submit")
 async def submit(payload: dict = Body(...)):
+    print("Submit payload:", payload)
     url = payload.get("url")
     print("Received submit request for URL:", url)
     if not url:
         raise HTTPException(status_code=400, detail="Missing 'url'")
-    encoder = payload.get("encoder", "av1_nvenc")  # or "av1_nvenc" if GPU container
+    vf = payload.get("format", "av1")
+    crf_value = payload.get("crf")
+    if crf_value is not None:
+        try:
+            crf = int(crf_value)
+        except ValueError:
+            # Handle invalid (non-int) value, e.g., log error or use default
+            print(f"Invalid CRF value '{crf_value}', using default 23")
+            crf = 23
+    else:
+        crf = 23
     job_id = str(uuid.uuid4())
     progress_kv[job_id] = {"status": "queued", "progress": 0, "message": "Queued"}
-    transcode_worker.spawn(job_id, url, encoder)  # background job
+    transcode_worker.spawn(job_id, url, vf=vf, crf=crf)  # background job
     return {"job_id": job_id}
 
 @api.get("/status/{job_id}")
 async def status(job_id: str):
+    print("Status request for job_id:", job_id)
     data = progress_kv.get(job_id)
     if not data:
         raise HTTPException(status_code=404, detail="Unknown job_id")
